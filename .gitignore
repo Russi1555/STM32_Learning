@@ -1,0 +1,69 @@
+# ==========================================
+# STM32CubeIDE / Eclipse
+# ==========================================
+.metadata/
+.settings/
+.project
+.cproject
+
+# Launch configurations
+*.launch
+
+# ==========================================
+# Build folders
+# ==========================================
+Debug/
+Release/
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+compile_commands.json
+cmake_install.cmake
+build.ninja
+.ninja_*
+
+# ==========================================
+# Compiled binaries
+# ==========================================
+*.o
+*.obj
+*.d
+*.a
+*.elf
+*.bin
+*.hex
+*.map
+*.list
+*.su
+
+# ==========================================
+# Dependency and temporary files
+# ==========================================
+*.tmp
+*.bak
+*.log
+*.swp
+*.swo
+
+# ==========================================
+# Operating systems
+# ==========================================
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ==========================================
+# VSCode (optional)
+# ==========================================
+.vscode/
+
+# ==========================================
+# CLion (optional)
+# ==========================================
+.idea/
+
+# ==========================================
+# STM32CubeMX temporary files (optional)
+# ==========================================
+*.mxproject
