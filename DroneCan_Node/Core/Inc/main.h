@@ -29,6 +29,9 @@ extern "C" {
 /* Includes ------------------------------------------------------------------*/
 #include "stm32g0xx_hal.h"
 #include <stdio.h>
+#include <string.h>
+#include "canard.h"
+#include "o1heap.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 

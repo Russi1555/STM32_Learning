@@ -18,7 +18,7 @@
 /* USER CODE END Header */
 /* Includes ------------------------------------------------------------------*/
 #include "main.h"
-
+#define HEAP_SIZE 16384
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 
@@ -47,6 +47,10 @@ UART_HandleTypeDef huart1;
 UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
+static uint8_t canard_heap[4096];
+
+static canard_t canard;
+static O1HeapInstance* heap;
 
 /* USER CODE END PV */
 
@@ -63,13 +67,100 @@ static void MX_USART2_UART_Init(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+static void on_test_message(
+    canard_subscription_t* self,
+    canard_us_t timestamp,
+    canard_prio_t priority,
+    uint_least8_t source_node_id,
+    uint_least8_t transfer_id,
+    canard_payload_t payload)
+{
+    (void)self;
+    (void)timestamp;
+    (void)priority;
+    (void)source_node_id;
+    (void)transfer_id;
 
+    printf("RX %u bytes: ",
+           (unsigned)payload.view.size);
+
+    for (size_t i = 0; i < payload.view.size; i++)
+    {
+        printf("%c",
+               ((const char*)payload.view.data)[i]);
+    }
+
+    printf("\r\n");
+}
 /* USER CODE END 0 */
 
 /**
   * @brief  The application entry point.
   * @retval int
   */
+
+
+
+  static void* memAllocate(canard_mem_t mem, size_t amount)
+  {
+      (void)mem;
+      return o1heapAllocate(heap, amount);
+  }
+
+  static void memFree(canard_mem_t mem, size_t amount, void* pointer)
+  {
+      (void)mem;
+      (void)amount;
+      o1heapFree(heap, pointer);
+  }
+
+static void serial_print(uint8_t *msg){
+	  HAL_UART_Transmit(
+	        &huart2,
+	        msg,
+	        strlen((char *)msg),
+	        HAL_MAX_DELAY
+	    );
+}
+
+static canard_us_t canard_now(const canard_t* self)
+{
+    (void)self;
+    return (canard_us_t)HAL_GetTick() * 1000;
+}
+static bool canard_tx(
+    canard_t* self,
+    void* user_context,
+    canard_us_t deadline,
+    uint_least8_t iface_index,
+    bool fd,
+    uint32_t extended_can_id,
+    canard_bytes_t can_data)
+{
+    (void)self;
+    (void)user_context;
+    (void)deadline;
+    (void)iface_index;
+
+    FDCAN_TxHeaderTypeDef txh;
+
+    txh.Identifier = extended_can_id;
+    txh.IdType = FDCAN_EXTENDED_ID;
+    txh.TxFrameType = FDCAN_DATA_FRAME;
+    txh.DataLength = canard_len_to_dlc[can_data.size] << 16;
+    txh.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
+    txh.BitRateSwitch = FDCAN_BRS_OFF;
+    txh.FDFormat = fd ? FDCAN_FD_CAN : FDCAN_CLASSIC_CAN;
+    txh.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
+    txh.MessageMarker = 0;
+
+    return HAL_FDCAN_AddMessageToTxFifoQ(
+        &hfdcan1,
+        &txh,
+        (uint8_t*)can_data.data
+    ) == HAL_OK;
+}
+
 int main(void)
 {
 
@@ -100,16 +191,76 @@ int main(void)
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
+  __attribute__((aligned(8))) static uint8_t heap_memory[HEAP_SIZE];
+  heap = o1heapInit(
+      heap_memory,
+      HEAP_SIZE
+  );
+
+  canard_mem_vtable_t allocator =
+  {
+      .free = memFree,
+      .alloc = memAllocate
+  };
+
+  canard_mem_set_t mem =
+  {
+      .tx_transfer = { &allocator, NULL },
+      .tx_frame    = { &allocator, NULL },
+      .rx_session  = { &allocator, NULL },
+      .rx_payload  = { &allocator, NULL },
+      .rx_filters  = { &allocator, NULL }
+  };
+
+  static const canard_vtable_t canard_vtable =
+  {
+      .now = canard_now,
+      .tx = canard_tx,
+      .filter = NULL
+  };
+
+  bool ok = canard_new(
+      &canard,
+	  &canard_vtable,
+      mem,
+      32,         // TX queue capacity
+      12345678,   // seed
+      0           // filters
+  );
+
+  if (!ok)
+  {
+      Error_Handler();
+  }
+
+  canard_set_node_id(&canard, 42);
+  static canard_subscription_t test_sub;
+
+  static const canard_subscription_vtable_t test_vtable =
+  {
+      .on_message = on_test_message
+  };
+
+  canard_subscribe_16b(
+      &canard,
+      &test_sub,
+      7509,
+      256,
+      CANARD_DEFAULT_TRANSFER_ID_TIMEOUT_us,
+      &test_vtable
+  );
+
+  serial_print((uint8_t*)"Canard initialized\r\n");
   FDCAN_FilterTypeDef filter;
 
-  filter.IdType = FDCAN_STANDARD_ID;
+  filter.IdType = FDCAN_EXTENDED_ID;
   filter.FilterIndex = 0;
   filter.FilterType = FDCAN_FILTER_MASK;
   filter.FilterConfig = FDCAN_FILTER_TO_RXFIFO0;
-  filter.FilterID1 = 0x000;
-  filter.FilterID2 = 0x000;
+  filter.FilterID1 = 0x00000000;
+  filter.FilterID2 = 0x00000000;
 
-  if (HAL_FDCAN_ConfigFilter(&hfdcan1, &filter) != HAL_OK)
+	if (HAL_FDCAN_ConfigFilter(&hfdcan1, &filter) != HAL_OK)
   {
       Error_Handler();
   }
@@ -119,58 +270,80 @@ int main(void)
       Error_Handler();
   }
 
-  printf("FDCAN started\r\n");
-
-  FDCAN_TxHeaderTypeDef txHeader;
-  FDCAN_RxHeaderTypeDef rxHeader;
-
-  uint8_t txData[8] =
-  {
-      'H', 'e', 'l', 'l',
-      'o', ' ', '!', '\0'
-  };
-
-  uint8_t rxData[8];
-  txHeader.Identifier = 0x123;
-  txHeader.IdType = FDCAN_STANDARD_ID;
-  txHeader.TxFrameType = FDCAN_DATA_FRAME;
-  txHeader.DataLength = FDCAN_DLC_BYTES_8;
-  txHeader.ErrorStateIndicator = FDCAN_ESI_ACTIVE;
-  txHeader.BitRateSwitch = FDCAN_BRS_OFF;
-  txHeader.FDFormat = FDCAN_CLASSIC_CAN;
-  txHeader.TxEventFifoControl = FDCAN_NO_TX_EVENTS;
-  txHeader.MessageMarker = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-      if (HAL_FDCAN_AddMessageToTxFifoQ(
-              &hfdcan1,
-              &txHeader,
-              txData) == HAL_OK)
+      static uint8_t transfer_id = 0;
+
+      const char msg[] = "SENDMSG";
+
+      canard_bytes_chain_t payload =
       {
-          printf("TX\r\n");
+          .bytes =
+          {
+              .size = sizeof(msg),
+              .data = msg
+          },
+          .next = NULL
+      };
+
+      bool ok = canard_publish_16b(
+          &canard,
+          1000000,
+          CANARD_IFACE_BITMAP_ALL,
+          canard_prio_nominal,
+          7509,
+          transfer_id++,
+          payload,
+          NULL
+      );
+
+      if (ok)
+      {
+          serial_print("publish ok\r\n");
+      }
+      else
+      {
+          serial_print("publish failed\r\n");
       }
 
-      HAL_Delay(10);
+      canard_poll(
+          &canard,
+          CANARD_IFACE_BITMAP_ALL
+      );
 
       if (HAL_FDCAN_GetRxFifoFillLevel(
               &hfdcan1,
               FDCAN_RX_FIFO0) > 0)
       {
+          FDCAN_RxHeaderTypeDef rxh;
+          uint8_t rxbuf[64];
+
           if (HAL_FDCAN_GetRxMessage(
                   &hfdcan1,
                   FDCAN_RX_FIFO0,
-                  &rxHeader,
-                  rxData) == HAL_OK)
+                  &rxh,
+                  rxbuf) == HAL_OK)
           {
-              printf(
-                  "RX id=0x%03lx data=%s\r\n",
-                  rxHeader.Identifier,
-                  rxData
+              canard_bytes_t data =
+              {
+                  .size = canard_dlc_to_len[
+                      (rxh.DataLength >> 16) & 0xF
+                  ],
+                  .data = rxbuf
+              };
+
+              canard_ingest_frame(
+                  &canard,
+                  (canard_us_t)HAL_GetTick() * 1000,
+                  0,
+                  rxh.Identifier,
+                  data
               );
+              serial_print("Frame recebido\r\n");
           }
       }
 
@@ -242,17 +415,25 @@ static void MX_FDCAN1_Init(void)
   hfdcan1.Init.AutoRetransmission = DISABLE;
   hfdcan1.Init.TransmitPause = DISABLE;
   hfdcan1.Init.ProtocolException = DISABLE;
-  hfdcan1.Init.NominalPrescaler = 16;
+  hfdcan1.Init.NominalPrescaler = 4;
   hfdcan1.Init.NominalSyncJumpWidth = 1;
-  hfdcan1.Init.NominalTimeSeg1 = 1;
-  hfdcan1.Init.NominalTimeSeg2 = 1;
+  hfdcan1.Init.NominalTimeSeg1 = 13;
+  hfdcan1.Init.NominalTimeSeg2 = 2;
   hfdcan1.Init.DataPrescaler = 1;
   hfdcan1.Init.DataSyncJumpWidth = 1;
   hfdcan1.Init.DataTimeSeg1 = 1;
   hfdcan1.Init.DataTimeSeg2 = 1;
-  hfdcan1.Init.StdFiltersNbr = 0;
+  hfdcan1.Init.StdFiltersNbr = 1;
   hfdcan1.Init.ExtFiltersNbr = 0;
   hfdcan1.Init.TxFifoQueueMode = FDCAN_TX_FIFO_OPERATION;
+
+  HAL_FDCAN_ConfigGlobalFilter(
+      &hfdcan1,
+      FDCAN_ACCEPT_IN_RX_FIFO0,
+      FDCAN_ACCEPT_IN_RX_FIFO0,
+      FDCAN_FILTER_REMOTE,
+      FDCAN_FILTER_REMOTE
+  );
   if (HAL_FDCAN_Init(&hfdcan1) != HAL_OK)
   {
     Error_Handler();
